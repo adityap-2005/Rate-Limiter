@@ -1,12 +1,21 @@
 import type { Request, Response, NextFunction } from "express";
-interface ClientRecord {
-    count: number,
-    windowStart: number
-}
+import redisClient from "../config/redis.js";
 
+const rateLimitScript = `
+    local current = redis.call('INCR', KEYS[1])
+
+    if current == 1 then
+        redis.call('PEXPIRE', KEYS[1], ARGV[1])
+    end
+
+    local ttl = redis.call('PTTL', KEYS[1])
+
+    return {current, ttl}
+`;
 interface RateLimiterOptions {
     limit: number;
     windowMs: number;
+    keyPrefix: string
 }
 
 export const rateLimiter = (options: RateLimiterOptions) => {
@@ -14,62 +23,65 @@ export const rateLimiter = (options: RateLimiterOptions) => {
         !Number.isInteger(options.limit) ||
         options.limit <= 0 ||
         !Number.isFinite(options.windowMs) ||
-        options.windowMs <= 0
+        options.windowMs <= 0 ||
+        typeof options.keyPrefix !== "string" ||
+        options.keyPrefix.trim().length === 0
     ) {
         throw new Error("Invalid rate limiter configuration");
     }
 
-    const clients = new Map<string, ClientRecord>();
+    const middleware = async (
+        req: Request,
+        res: Response,
+        next: NextFunction
+    ) => {
+        try {
 
-    function cleanupExpiredRecords() {
-        const now = Date.now();
+            const ip = req.ip ?? "unknown";
+            const key = `rate-limit:${options.keyPrefix}:${ip}`;
+            res.setHeader("X-RateLimit-Limit", options.limit);
 
-        console.log("Running rate limiter cleanup");
-        for (const [ip, record] of clients) {
-            const expired = now - record.windowStart >= options.windowMs;
-
-            if (expired) {
-                clients.delete(ip);
-                console.log(`Removed expired record for ${ip}`)
-            }
-        }
-    }
-
-    const cleanupTimer = setInterval(cleanupExpiredRecords, 30 * 1000);
-    cleanupTimer.unref();
-
-    const middleware = (req: Request, res: Response, next: NextFunction) => {
-
-        res.setHeader("X-RateLimit-Limit", options.limit);
-
-        const ip = req.ip ?? "unknown";
-        const now = Date.now();
-        const record = clients.get(ip);
-
-
-        if (!record || now - record.windowStart >= options.windowMs) {
-            clients.set(ip, {
-                count: 1,
-                windowStart: now
+            const result = await redisClient.eval(rateLimitScript, {
+                keys: [key],
+                arguments: [String(options.windowMs)],
             });
 
-            res.setHeader("X-RateLimit-Remaining", options.limit - 1);
+            if (!Array.isArray(result) || result.length !== 2) {
+                throw new Error("Unexpected Redis rate limiter script response");
+            }
+
+            const count = Number(result[0]);
+            const ttl = Number(result[1]);
+
+            if (
+                !Number.isSafeInteger(count) ||
+                count <= 0 ||
+                !Number.isSafeInteger(ttl) ||
+                ttl < 0
+            ) {
+                throw new Error("Invalid Redis rate limiter script response");
+            }
+
+            res.setHeader("X-RateLimit-Remaining", Math.max(0, options.limit - count));
+
+            if (count > options.limit) {
+                res.setHeader("Retry-After", Math.ceil(ttl / 1000));
+                return res.status(429).json({
+                    error: "Too many requests",
+                    message: "Rate limit exceeded. Try again later."
+                })
+            }
 
             return next();
+        } catch (error) {
+            console.error("Rate limiter Redis error:", error);
+
+            return res.status(503).json({
+                error: "Service unavailable",
+                message: "Rate limiting is temporarily unavailable."
+            });
         }
 
-        if (record.count >= options.limit) {
-            res.setHeader("X-RateLimit-Remaining", 0);
-
-            return res.status(429).json({
-                error: "Too many requests",
-                message: "Rate limit exceeded. Try again later."
-            })
-        }
-
-        record.count++;
-        res.setHeader("X-RateLimit-Remaining", options.limit - record.count);
-        return next();
     }
 
     return middleware;

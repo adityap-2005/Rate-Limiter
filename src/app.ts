@@ -8,11 +8,13 @@ app.use(express.json());
 const testRateLimiter = rateLimiter({
     limit: 5,
     windowMs: 60_000,
+    keyPrefix : "test"
 });
 
 const searchRateLimiter = rateLimiter({
     limit: 20,
     windowMs: 60_000,
+    keyPrefix : "search"
 });
 
 app.get("/api/test", testRateLimiter, (req, res) => {
