@@ -2,6 +2,7 @@ import express from 'express';
 const app = express();
 
 import { rateLimiter } from './middlewares/rateLimiter.js';
+import { slidingWindowRateLimiter } from './middlewares/slidingWindowRateLimiter.js';
 
 app.use(express.json());
 
@@ -17,6 +18,12 @@ const searchRateLimiter = rateLimiter({
     keyPrefix : "search"
 });
 
+const slidingWindowTestRateLimiter = slidingWindowRateLimiter({
+    limit: 5,
+    windowMs: 60_000,
+    keyPrefix: "sliding-test"
+});
+
 app.get("/api/test", testRateLimiter, (req, res) => {
     res.status(200).json({
         message: "Request successful"
@@ -26,6 +33,12 @@ app.get("/api/test", testRateLimiter, (req, res) => {
 app.get("/api/search", searchRateLimiter, (req, res) => {
     res.status(200).json({
         message: "Request successful"
+    });
+});
+
+app.get("/api/sliding-test", slidingWindowTestRateLimiter, (req, res) => {
+    res.status(200).json({
+        message: "Sliding Window request successful"
     });
 });
 

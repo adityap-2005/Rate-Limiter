@@ -1,6 +1,11 @@
 {
     "cSpell.words": [
         "PEXPIRE",
-        "PTTL"
+        "PTTL",
+        "WITHSCORES",
+        "ZADD",
+        "ZCARD",
+        "ZRANGE",
+        "ZREMRANGEBYSCORE"
     ]
 }
