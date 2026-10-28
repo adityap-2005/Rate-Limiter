@@ -1,5 +1,7 @@
 {
     "cSpell.words": [
+        "HMGET",
+        "HSET",
         "PEXPIRE",
         "PTTL",
         "WITHSCORES",
