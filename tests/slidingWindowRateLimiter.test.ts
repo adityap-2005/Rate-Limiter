@@ -1,5 +1,5 @@
 
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from "vitest";
 import express from "express";
 import request from "supertest";
 import redisClient from "../src/config/redis.js";
@@ -65,7 +65,8 @@ describe("Sliding Window Rate Limiter", () => {
 
         expect(response.status).toBe(429);
         expect(response.body.error).toBe("Too many requests");
-        expect(response.headers["retry-after"]).toBeDefined();
+        expect(response.headers["retry-after"]).toMatch(/^\d+$/);
+        expect(Number(response.headers["retry-after"])).toBeGreaterThan(0);
     });
 
 
@@ -166,5 +167,60 @@ describe("Sliding Window Rate Limiter", () => {
         expect(a2.status).toBe(200);
         expect(a3.status).toBe(429);
         expect(b1.status).toBe(200);
+    });
+
+
+    it("should reject invalid configuration", () => {
+        expect(() =>
+            slidingWindowRateLimiter({
+                limit: 0,
+                windowMs: 1_000,
+                keyPrefix: "test",
+            })
+        ).toThrow("Invalid sliding window rate limiter configuration");
+
+        expect(() =>
+            slidingWindowRateLimiter({
+                limit: 5,
+                windowMs: -1,
+                keyPrefix: "test",
+            })
+        ).toThrow("Invalid sliding window rate limiter configuration");
+
+        expect(() =>
+            slidingWindowRateLimiter({
+                limit: 5,
+                windowMs: 1_000,
+                keyPrefix: "   ",
+            })
+        ).toThrow("Invalid sliding window rate limiter configuration");
+    });
+
+
+    it("should return 503 when Redis is unavailable", async () => {
+        const app = express();
+
+        const limiter = slidingWindowRateLimiter({
+            limit: 5,
+            windowMs: 60_000,
+            keyPrefix: "sliding-redis-failure-test",
+        });
+
+        app.get("/test", limiter, (_req, res) => {
+            res.status(200).json({ message: "Success" });
+        });
+
+        const evalSpy = vi
+            .spyOn(redisClient, "eval")
+            .mockRejectedValue(new Error("Simulated Redis failure"));
+
+        try {
+            const response = await request(app).get("/test");
+
+            expect(response.status).toBe(503);
+            expect(response.body.error).toBe("Service Unavailable");
+        } finally {
+            evalSpy.mockRestore();
+        }
     });
 });

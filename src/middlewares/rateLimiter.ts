@@ -18,17 +18,21 @@ interface RateLimiterOptions {
     keyPrefix: string
 }
 
-export const rateLimiter = (options: RateLimiterOptions) => {
+const validOptions = (options: RateLimiterOptions) => {
     if (
         !Number.isInteger(options.limit) ||
         options.limit <= 0 ||
-        !Number.isFinite(options.windowMs) ||
+        !Number.isSafeInteger(options.windowMs) ||
         options.windowMs <= 0 ||
         typeof options.keyPrefix !== "string" ||
         options.keyPrefix.trim().length === 0
     ) {
         throw new Error("Invalid rate limiter configuration");
     }
+};
+
+export const rateLimiter = (options: RateLimiterOptions) => {
+    validOptions(options);
 
     const middleware = async (
         req: Request,
@@ -65,7 +69,7 @@ export const rateLimiter = (options: RateLimiterOptions) => {
             res.setHeader("X-RateLimit-Remaining", Math.max(0, options.limit - count));
 
             if (count > options.limit) {
-                res.setHeader("Retry-After", Math.ceil(ttl / 1000));
+                res.setHeader("Retry-After", Math.max(1, Math.ceil(ttl / 1000)));
                 return res.status(429).json({
                     error: "Too many requests",
                     message: "Rate limit exceeded. Try again later."
